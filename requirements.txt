@@ -1,0 +1,8 @@
+
+pyspark==3.5.1
+pandas
+psycopg2-binary
+pyyaml
+jupyter
+ipykernel
+

@@ -1,0 +1,12 @@
+paths:
+  raw: data/raw
+  bronze: data/bronze
+  silver: data/silver
+  gold: data/gold
+  logs: logs
+
+database:
+  host: localhost
+  database: assessment_db
+  user: postgres
+  password: Tiger

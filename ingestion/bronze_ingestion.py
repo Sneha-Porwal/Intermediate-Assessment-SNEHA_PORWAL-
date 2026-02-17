@@ -1,16 +1,19 @@
 import sys
 import os
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.append(BASE_DIR)
+
+# Add project root to path (one level up from ingestion/)
+sys.path.append(os.path.abspath(".."))
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
 from pyspark.sql.types import *
 from utils.logger import get_logger
 
-raw_path = os.path.join(BASE_DIR, "data", "raw")
-bronze_path = os.path.join(BASE_DIR, "data", "bronze")
-log_path = os.path.join(BASE_DIR, "logs", "pipeline.log")
+# -------------------------------------------------
+# Paths (relative to project root)
+# -------------------------------------------------
+raw_path = "data/raw"
+bronze_path = "data/bronze"
+log_path = "logs/pipeline.log"
 
 os.makedirs(bronze_path, exist_ok=True)
 
@@ -30,7 +33,7 @@ spark = SparkSession.builder \
 spark.sparkContext.setLogLevel("ERROR")
 
 # -------------------------------------------------
-# Schema Definitions (Schema Enforcement)
+# Schema Definitions
 # -------------------------------------------------
 customer_schema = StructType([
     StructField("customer_id", IntegerType(), True),
@@ -63,7 +66,7 @@ def ingest(file_name, schema, partition_col=None):
 
     logger.info(f"Processing {file_name}")
 
-    file_path = os.path.join(raw_path, f"{file_name}.csv")
+    file_path = f"{raw_path}/{file_name}.csv"
 
     try:
         df = spark.read \
@@ -75,22 +78,23 @@ def ingest(file_name, schema, partition_col=None):
         count_before = df.count()
         logger.info(f"{file_name} rows read: {count_before}")
 
-        # Minimal Cleaning (Bronze should not transform heavily)
         df = df.dropDuplicates()
 
         count_after = df.count()
         logger.info(f"{file_name} rows after deduplication: {count_after}")
- 
+
         writer = df.write.mode("overwrite")
 
         if partition_col:
             writer = writer.partitionBy(partition_col)
 
         # Write Parquet
-        writer.parquet(os.path.join(bronze_path, file_name))
+        writer.parquet(f"{bronze_path}/{file_name}")
 
-        # Write CSV (Readable Version)
-        df.write.mode("overwrite").option("header", True).csv(os.path.join(bronze_path, f"{file_name}_csv"))
+        # Write CSV
+        df.write.mode("overwrite") \
+            .option("header", True) \
+            .csv(f"{bronze_path}/{file_name}_csv")
 
         logger.info(f"{file_name} written to Bronze as parquet and csv")
 

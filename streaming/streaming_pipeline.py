@@ -23,10 +23,7 @@ channel STRING
 """
 
 # Read Streaming Files
-stream_df = spark.readStream \
-    .schema(schema) \
-    .option("header", True) \
-    .csv(stream_path)
+stream_df = spark.readStream.schema(schema).option("header", True).csv(stream_path)
 
 
 # Handle Late Data Using Watermark
@@ -52,13 +49,10 @@ final_df = windowed_df.select(
 )
 
 # Write Streaming Output
-query = final_df.writeStream \
-    .outputMode("append") \
-    .format("csv") \
+query = final_df.writeStream.outputMode("append").format("csv") \
     .option("path", gold_path) \
     .option("checkpointLocation", checkpoint_path) \
-    .option("header", True) \
-    .start()
+    .option("header", True).start()
 
 print("Streaming Job Started...")
 print("Add batch files to data/streaming_input folder...")

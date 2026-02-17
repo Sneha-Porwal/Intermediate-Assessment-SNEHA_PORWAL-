@@ -1,16 +1,12 @@
 import sys
 import os
 
-# Add project root to path (one level up from ingestion/)
 sys.path.append(os.path.abspath(".."))
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from utils.logger import get_logger
 
-# -------------------------------------------------
-# Paths (relative to project root)
-# -------------------------------------------------
 raw_path = "data/raw"
 bronze_path = "data/bronze"
 log_path = "logs/pipeline.log"

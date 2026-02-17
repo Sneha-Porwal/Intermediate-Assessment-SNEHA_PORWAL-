@@ -36,6 +36,7 @@ stream_df = stream_df.withWatermark(
 )
 
 # Window Aggregation
+# Window Aggregation
 windowed_df = stream_df.groupBy(
     window(col("transaction_timestamp"), "5 minutes")
 ).agg(
@@ -43,12 +44,23 @@ windowed_df = stream_df.groupBy(
     count("transaction_id").alias("total_transactions")
 )
 
+final_df = windowed_df.select(
+    col("window.start").alias("window_start"),
+    col("window.end").alias("window_end"),
+    col("total_revenue"),
+    col("total_transactions")
+)
+
 # Write Streaming Output
-query = windowed_df.writeStream.outputMode("append").format("csv") \
+query = final_df.writeStream \
+    .outputMode("append") \
+    .format("csv") \
     .option("path", gold_path) \
     .option("checkpointLocation", checkpoint_path) \
-    .option("header", True).start()
+    .option("header", True) \
+    .start()
 
 print("Streaming Job Started...")
+print("Add batch files to data/streaming_input folder...")
 
 query.awaitTermination()

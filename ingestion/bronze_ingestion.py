@@ -22,11 +22,9 @@ logger.info("Bronze Layer Job Started")
 # -------------------------------------------------
 # Spark Session
 # -------------------------------------------------
-spark = SparkSession.builder \
-    .appName("BronzeIngestion") \
-    .getOrCreate()
+spark = SparkSession.builder.appName("BronzeIngestion").getOrCreate()
 
-spark.sparkContext.setLogLevel("ERROR")
+spark.sparkContext.setLogLevel("ERROR")                  #Reduce the internal logs and only shows the error logs
 
 # -------------------------------------------------
 # Schema Definitions
@@ -65,11 +63,7 @@ def ingest(file_name, schema, partition_col=None):
     file_path = f"{raw_path}/{file_name}.csv"
 
     try:
-        df = spark.read \
-            .option("header", True) \
-            .option("mode", "DROPMALFORMED") \
-            .schema(schema) \
-            .csv(file_path)
+        df = spark.read.option("header", True).option("mode", "DROPMALFORMED").schema(schema).csv(file_path)
 
         count_before = df.count()
         logger.info(f"{file_name} rows read: {count_before}")
@@ -88,9 +82,7 @@ def ingest(file_name, schema, partition_col=None):
         writer.parquet(f"{bronze_path}/{file_name}")
 
         # Write CSV
-        df.write.mode("overwrite") \
-            .option("header", True) \
-            .csv(f"{bronze_path}/{file_name}_csv")
+        df.write.mode("overwrite").option("header", True).csv(f"{bronze_path}/{file_name}_csv")
 
         logger.info(f"{file_name} written to Bronze as parquet and csv")
 

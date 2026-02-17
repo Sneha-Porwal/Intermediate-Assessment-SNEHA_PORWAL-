@@ -4,8 +4,9 @@ import os
 import glob
 from datetime import date
 
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-silver_path = os.path.join(BASE_DIR, "data", "silver")
+# Simple relative path
+silver_path = "data/silver"
+
 
 def read_spark_csv(folder_name):
     folder_path = os.path.join(silver_path, folder_name)
@@ -20,6 +21,9 @@ def read_spark_csv(folder_name):
     return df
 
 
+# -------------------------------------------------
+# PostgreSQL Connection
+# -------------------------------------------------
 conn = psycopg2.connect(
     host="localhost",
     database="assessment_db",
@@ -29,6 +33,7 @@ conn = psycopg2.connect(
 
 cursor = conn.cursor()
 
+# 1️ LOAD PRODUCTS
 products = read_spark_csv("dim_products")
 
 product_data = [
@@ -51,7 +56,7 @@ conn.commit()
 print("Products Loaded")
 
 
-# LOAD CUSTOMERS (Dynamic SCD Type 2)
+#  LOAD CUSTOMERS (Dynamic SCD Type 2)
 customers = read_spark_csv("dim_customers")
 today = date.today()
 
@@ -109,9 +114,11 @@ for _, row in customers.iterrows():
 conn.commit()
 print("Customers Loaded (SCD Type 2 Applied)")
 
-#  LOAD TRANSACTIONS (FAST USING MAPPING)
+
+#  LOAD TRANSACTIONS
 transactions = read_spark_csv("fact_transactions")
 
+# Load current surrogate keys once
 cursor.execute("""
     SELECT customer_id, customer_sk
     FROM dim_customers

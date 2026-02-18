@@ -1,7 +1,7 @@
 import psycopg2
 import pandas as pd
 import os
-import glob
+import glob                          # Group multiple csv file inside a folder
 from datetime import date
 
 # Simple relative path

@@ -63,7 +63,7 @@ def ingest(file_name, schema, partition_col=None):
     file_path = f"{raw_path}/{file_name}.csv"
 
     try:
-        df = spark.read.option("header", True).option("mode", "DROPMALFORMED").schema(schema).csv(file_path)
+        df = spark.read.option("header", True).option("mode", "DROPMALFORMED").schema(schema).csv(file_path)           #skips the corrupted values
 
         count_before = df.count()
         logger.info(f"{file_name} rows read: {count_before}")

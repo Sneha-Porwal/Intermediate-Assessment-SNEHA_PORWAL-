@@ -1,0 +1,12 @@
+# Data folders
+data/
+logs/
+spark-warehouse/
+checkpoint/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+

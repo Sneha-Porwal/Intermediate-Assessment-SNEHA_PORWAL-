@@ -3,11 +3,15 @@ import random
 import os
 from datetime import datetime, timedelta
 
+random.seed(42)
+
 services = ["auth", "order", "payment", "inventory"]
 records = []
 start = datetime(2026, 1, 1)
 
-for i in range(100000):
+N = 10000
+
+for i in range(N):
     ts = start + timedelta(seconds=i)
 
     status = random.choices(
@@ -28,4 +32,4 @@ os.makedirs(os.path.dirname(output_path), exist_ok=True)
 with open(output_path, "w") as f:
     json.dump(records, f, indent=2)
 
-print("Generated 100K logs.")
+print(f"Generated {N} logs.")

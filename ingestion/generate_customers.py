@@ -1,8 +1,11 @@
 import pandas as pd
 import random
+import os
 from datetime import datetime, timedelta
 
-N = 50000
+random.seed(42)
+
+N = 5000
 regions = ["North","South","East","West","Central"]
 
 data = []
@@ -26,30 +29,8 @@ df = pd.DataFrame(data, columns=[
     "effective_from","effective_to"
 ])
 
-# Add SCD Type 2 changes (10% customers move region)
-''' updates = df.sample(int(N*0.1))
-
-scd_records = []
-for _, row in updates.iterrows():
-    change_date = datetime(2026,1,1)
-    row["is_current"] = False
-    row["effective_to"] = change_date.strftime("%Y-%m-%d")
-    scd_records.append(row)
-
-    scd_records.append([
-        row["customer_id"],
-        row["name"],
-        random.choice(regions),
-        row["signup_date"],
-        True,
-        change_date.strftime("%Y-%m-%d"),
-        None
-    ])
-
-df = pd.concat([df, pd.DataFrame(scd_records, columns=df.columns)])  '''
-
-# Add SCD Type 2 changes (10% customers move region)
-updates = df.sample(int(N * 0.1))
+# Add SCD Type 2 changes (10%)
+updates = df.sample(int(N * 0.1), random_state=42)
 
 scd_records = []
 
@@ -66,7 +47,6 @@ for _, row in updates.iterrows():
         change_date.strftime("%Y-%m-%d")
     ]
 
-    # New record (new region)
     new_record = [
         row["customer_id"],
         row["name"],
@@ -80,10 +60,11 @@ for _, row in updates.iterrows():
     scd_records.append(old_record)
     scd_records.append(new_record)
 
-# Append SCD records properly
 scd_df = pd.DataFrame(scd_records, columns=df.columns)
 
 df = pd.concat([df, scd_df], ignore_index=True)
+
+os.makedirs("../data/raw", exist_ok=True)
 df.to_csv("../data/raw/customers.csv", index=False)
 
-print("Generated 50K customers + SCD records.")
+print(f"Generated {len(df)} customer records (including SCD changes).")

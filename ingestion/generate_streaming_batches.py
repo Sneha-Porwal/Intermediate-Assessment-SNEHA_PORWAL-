@@ -3,6 +3,8 @@ import random
 import os
 from datetime import datetime, timedelta
 
+random.seed(42)
+
 num_batches = 10
 records_per_batch = 1000
 
@@ -20,14 +22,14 @@ for batch in range(1, num_batches + 1):
     for _ in range(records_per_batch):
 
         timestamp = start_time + timedelta(
-            seconds=random.randint(0, 100000)
+            seconds=batch * 1000 + random.randint(0, 100)
         )
 
         data.append([
-            random.randint(1, 100000),        # transaction_id
-            random.randint(1, 5000),          # customer_id
-            random.randint(1, 500),           # product_id
-            round(random.uniform(10, 5000), 2),  # amount
+            random.randint(1, 100000),
+            random.randint(1, 5000),
+            random.randint(1, 1000),  # match products range
+            round(random.uniform(10, 5000), 2),
             timestamp.strftime("%Y-%m-%d %H:%M:%S"),
             random.choice(["success", "failed"]),
             random.choice(["online", "store"])

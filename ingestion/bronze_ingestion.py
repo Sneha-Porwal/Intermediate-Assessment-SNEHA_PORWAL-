@@ -1,15 +1,19 @@
 import sys
 import os
 
-sys.path.append(os.path.abspath(".."))
+# Add project root to path
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(BASE_DIR)
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from utils.logger import get_logger
+import shutil
+from pathlib import Path
 
-raw_path = "data/raw"
-bronze_path = "data/bronze"
-log_path = "logs/pipeline.log"
+raw_path = os.path.join(BASE_DIR, "data", "raw")
+bronze_path = os.path.join(BASE_DIR, "data", "bronze")
+log_path = os.path.join(BASE_DIR, "logs", "pipeline.log")
 
 os.makedirs(bronze_path, exist_ok=True)
 
@@ -18,11 +22,36 @@ os.makedirs(bronze_path, exist_ok=True)
 # -------------------------------------------------
 logger = get_logger(log_path)
 logger.info("Bronze Layer Job Started")
+logger.info(f"BASE_DIR: {BASE_DIR}")
+logger.info(f"raw_path: {raw_path}")
+logger.info(f"bronze_path: {bronze_path}")
+
+# Quick runtime checks for Java on Windows/paths
+java_on_path = shutil.which("java")
+logger.info(f"java on PATH: {java_on_path}")
+logger.info(f"JAVA_HOME env: {os.environ.get('JAVA_HOME')}")
+if not java_on_path:
+    logger.error("Java not found on PATH. Install a JDK and set JAVA_HOME.")
+    # don't exit here; let Spark attempt to start and produce its error
+else:
+    # If JAVA_HOME not set, try to infer it from java executable location
+    if not os.environ.get('JAVA_HOME'):
+        try:
+            inferred = str(Path(java_on_path).parents[1])
+            os.environ['JAVA_HOME'] = inferred
+            logger.info(f"Inferred JAVA_HOME: {inferred}")
+        except Exception:
+            pass
 
 # -------------------------------------------------
 # Spark Session
 # -------------------------------------------------
-spark = SparkSession.builder.appName("BronzeIngestion").getOrCreate()
+try:
+    spark = SparkSession.builder.appName("BronzeIngestion").getOrCreate()
+except Exception as e:
+    logger.error("Failed to start Spark Session. Check Java and Spark installation.")
+    logger.error(str(e))
+    raise
 
 spark.sparkContext.setLogLevel("ERROR")                  #Reduce the internal logs and only shows the error logs
 
@@ -60,7 +89,8 @@ def ingest(file_name, schema, partition_col=None):
 
     logger.info(f"Processing {file_name}")
 
-    file_path = f"{raw_path}/{file_name}.csv"
+    file_path = os.path.join(raw_path, f"{file_name}.csv")
+    logger.info(f"Computed file_path: {file_path}")
 
     try:
         df = spark.read.option("header", True).option("mode", "DROPMALFORMED").schema(schema).csv(file_path)           #skips the corrupted values
@@ -79,10 +109,10 @@ def ingest(file_name, schema, partition_col=None):
             writer = writer.partitionBy(partition_col)
 
         # Write Parquet
-        writer.parquet(f"{bronze_path}/{file_name}")
+        writer.parquet(os.path.join(bronze_path, file_name))
 
         # Write CSV
-        df.write.mode("overwrite").option("header", True).csv(f"{bronze_path}/{file_name}_csv")
+        df.write.mode("overwrite").option("header", True).csv(os.path.join(bronze_path, f"{file_name}_csv"))
 
         logger.info(f"{file_name} written to Bronze as parquet and csv")
 

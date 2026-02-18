@@ -28,7 +28,7 @@ GROUP BY c.region
 ORDER BY total_revenue DESC;
 
 
--- 4Customer Retention
+-- 4.Customer Retention
 SELECT 
     c.customer_id,
     COUNT(f.transaction_id) AS total_transactions

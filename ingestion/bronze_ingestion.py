@@ -7,6 +7,8 @@ sys.path.append(BASE_DIR)
 
 from pyspark.sql.types import *
 from utils.logger import get_logger
+import shutil
+from pathlib import Path
 
 # -------------------------------------------------
 # Paths

@@ -1,162 +1,172 @@
+import os
 import psycopg2
 import pandas as pd
-import os
-import glob                          # Group multiple csv file inside a folder
-from datetime import date
-
-# Simple relative path
-silver_path = "data/silver"
 
 
-def read_spark_csv(folder_name):
-    folder_path = os.path.join(silver_path, folder_name)
-    files = glob.glob(os.path.join(folder_path, "*.csv"))
+def run_warehouse_load():
 
-    if not files:
-        raise Exception(f"No CSV files found in {folder_path}")
+    # -------------------------------------------------
+    # Config
+    # -------------------------------------------------
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    SILVER_PATH = os.path.join(BASE_DIR, "data", "silver")
 
-    df_list = [pd.read_csv(file) for file in files]
-    df = pd.concat(df_list, ignore_index=True)
-    df = df.where(pd.notnull(df), None)
-    return df
+    DB_CONFIG = {
+        "host": "localhost",
+        "database": "assessment_db",
+        "user": "postgres",
+        "password": "Tiger",
+        "port": 5432
+    }
 
+    print("Connecting to PostgreSQL...")
 
-# -------------------------------------------------
-# PostgreSQL Connection
-# -------------------------------------------------
-conn = psycopg2.connect(
-    host="localhost",
-    database="assessment_db",
-    user="postgres",
-    password="Tiger"
-)
+    conn = psycopg2.connect(**DB_CONFIG)
+    cursor = conn.cursor()
 
-cursor = conn.cursor()
+    # -------------------------------------------------
+    # Idempotent Load (Clean Tables)
+    # -------------------------------------------------
+    print("Cleaning existing warehouse tables...")
 
-# 1️ LOAD PRODUCTS
-products = read_spark_csv("dim_products")
+    cursor.execute("TRUNCATE fact_transactions RESTART IDENTITY CASCADE;")
+    cursor.execute("TRUNCATE dim_customers RESTART IDENTITY CASCADE;")
+    cursor.execute("TRUNCATE dim_products CASCADE;")
+    conn.commit()
 
-product_data = [
-    (
-        int(row["product_id"]),
-        row["product_name"],
-        row["category"],
-        float(row["price"])
-    )
-    for _, row in products.iterrows()
-]
+    # -------------------------------------------------
+    # Helper: Read Spark Parquet with Partition Support
+    # -------------------------------------------------
+    def read_parquet_folder(folder_name):
 
-cursor.executemany("""
-    INSERT INTO dim_products (product_id, product_name, category, price)
-    VALUES (%s, %s, %s, %s)
-    ON CONFLICT (product_id) DO NOTHING;
-""", product_data)
+        folder_path = os.path.join(SILVER_PATH, folder_name)
+        dfs = []
 
-conn.commit()
-print("Products Loaded")
+        for root, _, files in os.walk(folder_path):
+            for f in files:
+                if f.endswith(".parquet"):
+                    full_path = os.path.join(root, f)
+                    df = pd.read_parquet(full_path)
 
+                    # Extract partition columns (e.g., transaction_date=2025-01-01)
+                    relative_path = os.path.relpath(root, folder_path)
+                    parts = relative_path.split(os.sep)
 
-#  LOAD CUSTOMERS (Dynamic SCD Type 2)
-customers = read_spark_csv("dim_customers")
-today = date.today()
+                    for part in parts:
+                        if "=" in part:
+                            col_name, col_value = part.split("=")
+                            df[col_name] = col_value
 
-for _, row in customers.iterrows():
+                    dfs.append(df)
 
-    customer_id = int(row["customer_id"])
+        if not dfs:
+            return pd.DataFrame()
 
-    cursor.execute("""
-        SELECT customer_sk, name, region
-        FROM dim_customers
-        WHERE customer_id = %s AND is_current = TRUE;
-    """, (customer_id,))
+        return pd.concat(dfs, ignore_index=True)
 
-    existing = cursor.fetchone()
+    # -------------------------------------------------
+    # Load Customers
+    # -------------------------------------------------
+    def load_dim_customers():
 
-    if existing is None:
-        cursor.execute("""
-            INSERT INTO dim_customers
-            (customer_id, name, region,
-             effective_from, effective_to, is_current)
-            VALUES (%s, %s, %s, %s, %s, TRUE);
-        """, (
-            customer_id,
-            row["name"],
-            row["region"],
-            today,
-            None
-        ))
+        print("Loading dim_customers...")
 
-    else:
-        customer_sk, old_name, old_region = existing
+        df = read_parquet_folder("dim_customers")
 
-        if old_name != row["name"] or old_region != row["region"]:
-
-            cursor.execute("""
-                UPDATE dim_customers
-                SET is_current = FALSE,
-                    effective_to = %s
-                WHERE customer_sk = %s;
-            """, (today, customer_sk))
-
+        for _, row in df.iterrows():
             cursor.execute("""
                 INSERT INTO dim_customers
-                (customer_id, name, region,
-                 effective_from, effective_to, is_current)
-                VALUES (%s, %s, %s, %s, %s, TRUE);
+                (customer_id, name, region, signup_date,
+                 is_current, effective_from, effective_to)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
             """, (
-                customer_id,
-                row["name"],
-                row["region"],
-                today,
-                None
+                row.get("customer_id"),
+                row.get("name"),
+                row.get("region"),
+                row.get("signup_date"),
+                row.get("is_current"),
+                row.get("effective_from"),
+                row.get("effective_to")
             ))
 
-conn.commit()
-print("Customers Loaded (SCD Type 2 Applied)")
+        conn.commit()
+        print("dim_customers loaded.")
 
+    # -------------------------------------------------
+    # Load Products
+    # -------------------------------------------------
+    def load_dim_products():
 
-#  LOAD TRANSACTIONS
-transactions = read_spark_csv("fact_transactions")
+        print("Loading dim_products...")
 
-# Load current surrogate keys once
-cursor.execute("""
-    SELECT customer_id, customer_sk
-    FROM dim_customers
-    WHERE is_current = TRUE;
-""")
+        df = read_parquet_folder("dim_products")
 
-customer_map = dict(cursor.fetchall())
+        for _, row in df.iterrows():
+            cursor.execute("""
+                INSERT INTO dim_products
+                (product_id, product_name, category, price)
+                VALUES (%s,%s,%s,%s)
+                ON CONFLICT (product_id) DO NOTHING
+            """, (
+                row.get("product_id"),
+                row.get("product_name"),
+                row.get("category"),
+                row.get("price")
+            ))
 
-transaction_data = []
+        conn.commit()
+        print("dim_products loaded.")
 
-for _, row in transactions.iterrows():
+    # -------------------------------------------------
+    # Load Fact Transactions
+    # -------------------------------------------------
+    def load_fact_transactions():
 
-    customer_id = int(row["customer_id"])
+        print("Loading fact_transactions...")
 
-    if customer_id in customer_map:
+        df = read_parquet_folder("fact_transactions")
 
-        transaction_data.append((
-            int(row["transaction_id"]),
-            customer_map[customer_id],
-            int(row["product_id"]),
-            float(row["amount"]),
-            row["transaction_date"],
-            row["status"],
-            row["channel"]
-        ))
+        for _, row in df.iterrows():
 
-cursor.executemany("""
-    INSERT INTO fact_transactions
-    (transaction_id, customer_sk, product_id,
-     amount, transaction_date, status, channel)
-    VALUES (%s, %s, %s, %s, %s, %s, %s)
-    ON CONFLICT (transaction_id) DO NOTHING;
-""", transaction_data)
+            cursor.execute("""
+                SELECT customer_sk
+                FROM dim_customers
+                WHERE customer_id = %s AND is_current = TRUE
+            """, (row.get("customer_id"),))
 
-conn.commit()
-print("Transactions Loaded")
+            result = cursor.fetchone()
 
-cursor.close()
-conn.close()
+            if result:
+                customer_sk = result[0]
 
-print("All Data Loaded Successfully!")
+                cursor.execute("""
+                    INSERT INTO fact_transactions
+                    (transaction_id, customer_sk, product_id,
+                     amount, transaction_date, status, channel, fraud_flag)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (transaction_id) DO NOTHING
+                """, (
+                    row.get("transaction_id"),
+                    customer_sk,
+                    row.get("product_id"),
+                    row.get("amount"),
+                    row.get("transaction_date"),
+                    row.get("status"),
+                    row.get("channel"),
+                    row.get("fraud_flag", False)
+                ))
+
+        conn.commit()
+        print("fact_transactions loaded.")
+
+    # -------------------------------------------------
+    # Execute Loading
+    # -------------------------------------------------
+    load_dim_customers()
+    load_dim_products()
+    load_fact_transactions()
+
+    cursor.close()
+    conn.close()
+
+    print("Warehouse Load Completed Successfully.")

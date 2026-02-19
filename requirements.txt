@@ -1,8 +1,5 @@
-
-pyspark==3.5.1
+pyspark=3.5.1
 pandas
+numpy
 psycopg2-binary
-pyyaml
-jupyter
-ipykernel
-
+pyarrow

@@ -1,30 +1,23 @@
 import sys
 import os
 
-sys.path.append(os.path.abspath(".."))
+# Allow project root imports
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(BASE_DIR)
 
-from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from utils.logger import get_logger
 
-raw_path = "data/raw"
-bronze_path = "data/bronze"
-log_path = "logs/pipeline.log"
-
-os.makedirs(bronze_path, exist_ok=True)
-
 # -------------------------------------------------
-# Logger
+# Paths
 # -------------------------------------------------
-logger = get_logger(log_path)
-logger.info("Bronze Layer Job Started")
+RAW_PATH = os.path.join(BASE_DIR, "data", "raw")
+BRONZE_PATH = os.path.join(BASE_DIR, "data", "bronze")
+LOG_PATH = os.path.join(BASE_DIR, "logs", "pipeline.log")
 
-# -------------------------------------------------
-# Spark Session
-# -------------------------------------------------
-spark = SparkSession.builder.appName("BronzeIngestion").getOrCreate()
+os.makedirs(BRONZE_PATH, exist_ok=True)
 
-spark.sparkContext.setLogLevel("ERROR")                  #Reduce the internal logs and only shows the error logs
+logger = get_logger(LOG_PATH)
 
 # -------------------------------------------------
 # Schema Definitions
@@ -33,7 +26,10 @@ customer_schema = StructType([
     StructField("customer_id", IntegerType(), True),
     StructField("name", StringType(), True),
     StructField("region", StringType(), True),
-    StructField("signup_date", StringType(), True)
+    StructField("signup_date", StringType(), True),
+    StructField("is_current", BooleanType(), True),
+    StructField("effective_from", StringType(), True),
+    StructField("effective_to", StringType(), True)
 ])
 
 product_schema = StructType([
@@ -53,17 +49,39 @@ transaction_schema = StructType([
     StructField("channel", StringType(), True)
 ])
 
+log_schema = StructType([
+    StructField("timestamp", StringType(), True),
+    StructField("service", StringType(), True),
+    StructField("status_code", IntegerType(), True),
+    StructField("response_time_ms", IntegerType(), True)
+])
+
 # -------------------------------------------------
-# Ingestion Function
+# Generic Ingestion Function
 # -------------------------------------------------
-def ingest(file_name, schema, partition_col=None):
+def ingest(spark, file_name, schema, file_type="csv", partition_col=None):
 
     logger.info(f"Processing {file_name}")
 
-    file_path = f"{raw_path}/{file_name}.csv"
-
     try:
-        df = spark.read.option("header", True).option("mode", "DROPMALFORMED").schema(schema).csv(file_path)           #skips the corrupted values
+        if file_type == "csv":
+            file_path = os.path.join(RAW_PATH, f"{file_name}.csv")
+            df = (
+                spark.read.option("header", True)
+                .option("mode", "DROPMALFORMED")
+                .schema(schema)
+                .csv(file_path)
+            )
+
+        elif file_type == "json":
+            file_path = os.path.join(RAW_PATH, f"{file_name}.json")
+            df = spark.read.schema(schema).json(file_path)
+
+        else:
+            logger.error(f"Unsupported file type for {file_name}")
+            return
+
+        df = df.cache()
 
         count_before = df.count()
         logger.info(f"{file_name} rows read: {count_before}")
@@ -78,27 +96,37 @@ def ingest(file_name, schema, partition_col=None):
         if partition_col:
             writer = writer.partitionBy(partition_col)
 
-        # Write Parquet
-        writer.parquet(f"{bronze_path}/{file_name}")
+        writer.parquet(os.path.join(BRONZE_PATH, file_name))
 
-        # Write CSV
-        df.write.mode("overwrite").option("header", True).csv(f"{bronze_path}/{file_name}_csv")
-
-        logger.info(f"{file_name} written to Bronze as parquet and csv")
+        logger.info(f"{file_name} written to Bronze successfully")
 
     except Exception as e:
         logger.error(f"Error processing {file_name}: {str(e)}")
+        raise
+
 
 # -------------------------------------------------
-# Run Bronze Layer
+# Bronze Layer Entry Point (Modular)
 # -------------------------------------------------
-if __name__ == "__main__":
+def run_bronze(spark):
 
-    ingest("customers", customer_schema)
-    ingest("products", product_schema)
-    ingest("transactions", transaction_schema, partition_col="transaction_date")
+    logger.info("Bronze Layer Started")
+
+    ingest(spark, "customers", customer_schema)
+    ingest(spark, "products", product_schema)
+    ingest(spark, "transactions", transaction_schema, partition_col="transaction_date")
+    ingest(spark, "app_logs", log_schema, file_type="json")
 
     logger.info("Bronze Layer Completed Successfully")
     logger.info("--------------------------------------------------")
+
+
+if __name__ == "__main__":
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.appName("BronzeIngestion").getOrCreate()
+    spark.sparkContext.setLogLevel("ERROR")
+
+    run_bronze(spark)
 
     spark.stop()

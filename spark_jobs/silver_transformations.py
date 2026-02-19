@@ -1,87 +1,141 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, trim, lower, to_date, broadcast
-from utils.logger import get_logger
+import sys
 import os
 
-bronze_path = "data/bronze"
-silver_path = "data/silver"
-log_path = "logs/silver_pipeline.log"
+# -------------------------------------------------
+# Allow project root imports
+# -------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(BASE_DIR)
 
-os.makedirs(silver_path, exist_ok=True)
-
-logger = get_logger(log_path)
-logger.info("Silver Layer Job Started")
-
-spark = SparkSession.builder.appName("SilverLayer").getOrCreate()
-
-spark.sparkContext.setLogLevel("ERROR")
-
-logger.info("Loading Bronze Data")
-
-customers = spark.read.parquet(f"{bronze_path}/customers")
-products = spark.read.parquet(f"{bronze_path}/products")
-transactions = spark.read.parquet(f"{bronze_path}/transactions")
-
-# 1 Customers Transformation
-logger.info("Processing Customers")
-
-customers = customers.dropDuplicates(["customer_id"]) \
-    .withColumn("name", trim(col("name"))) \
-    .withColumn("region", lower(trim(col("region")))) \
-    .withColumn("signup_date", to_date(col("signup_date"))) \
-    .fillna({"region": "unknown"})
-
-logger.info(f"Customers Count: {customers.count()}")
-
-customers.write.mode("overwrite") .option("header", True).csv(f"{silver_path}/dim_customers")
-
-logger.info("dim_customers created")
-
-# 2️ Products Transformation
-logger.info("Processing Products")
-
-products = products.dropDuplicates(["product_id"]) \
-    .withColumn("product_name", trim(col("product_name"))) \
-    .withColumn("category", lower(trim(col("category")))).fillna({"category": "unknown"})
-
-logger.info(f"Products Count: {products.count()}")
-
-products.write.mode("overwrite").option("header", True).csv(f"{silver_path}/dim_products")
-
-logger.info("dim_products created")
-
-# 3️ Transactions Transformation
-logger.info("Processing Transactions")
-
-transactions = transactions.dropDuplicates(["transaction_id"]) \
-    .withColumn("transaction_date", to_date(col("transaction_date"))) \
-    .fillna({"status": "unknown", "channel": "unknown"})
-
-logger.info(f"Transactions before join: {transactions.count()}")
-
-# Broadcast joins
-transactions = transactions.join(
-    broadcast(customers.select("customer_id")),
-    "customer_id",
-    "inner"
+from pyspark.sql.functions import (
+    col,
+    trim,
+    lower,
+    to_date,
+    broadcast
 )
-logger.info(f"After customer join: {transactions.count()}")
+from utils.logger import get_logger
 
-transactions = transactions.join(
-    broadcast(products.select("product_id")),
-    "product_id",
-    "inner"
-)
+# -------------------------------------------------
+# Paths
+# -------------------------------------------------
+BRONZE_PATH = os.path.join(BASE_DIR, "data", "bronze")
+SILVER_PATH = os.path.join(BASE_DIR, "data", "silver")
+LOG_PATH = os.path.join(BASE_DIR, "logs", "silver_pipeline.log")
 
-logger.info(f"After product join: {transactions.count()}")
+os.makedirs(SILVER_PATH, exist_ok=True)
 
-# Partitioned write
-transactions.write.mode("overwrite").option("header", True).partitionBy("transaction_date") \
-    .csv(f"{silver_path}/fact_transactions")
+logger = get_logger(LOG_PATH)
 
-logger.info("fact_transactions created")
+# -------------------------------------------------
+# Silver Layer Function
+# -------------------------------------------------
+def run_silver(spark):
 
-logger.info("Silver Layer Created Successfully")
-logger.info("--------------------------------------------------")
+    spark.sparkContext.setLogLevel("ERROR")
+    logger.info("Silver Layer Started")
 
-spark.stop()
+    # ---------------------------------------------
+    # Load Bronze Data
+    # ---------------------------------------------
+    customers = spark.read.parquet(f"{BRONZE_PATH}/customers")
+    products = spark.read.parquet(f"{BRONZE_PATH}/products")
+    transactions = spark.read.parquet(f"{BRONZE_PATH}/transactions")
+
+    # ---------------------------------------------
+    # Customers – SCD Type 2 Preservation
+    # ---------------------------------------------
+    logger.info("Processing Customers")
+
+    customers = customers.dropDuplicates()
+
+    customers = (
+        customers
+        .withColumn("name", trim(col("name")))
+        .withColumn("region", lower(trim(col("region"))))
+        .withColumn("signup_date", to_date(col("signup_date")))
+        .withColumn("effective_from", to_date(col("effective_from")))
+        .withColumn("effective_to", to_date(col("effective_to")))
+        .fillna({"region": "unknown"})
+    )
+
+    logger.info(f"Customers count: {customers.count()}")
+
+    customers.write.mode("overwrite") \
+        .parquet(f"{SILVER_PATH}/dim_customers")
+
+    logger.info("dim_customers created")
+
+    # ---------------------------------------------
+    # Products
+    # ---------------------------------------------
+    logger.info("Processing Products")
+
+    products = products.dropDuplicates()
+
+    products = (
+        products
+        .withColumn("product_name", trim(col("product_name")))
+        .withColumn("category", lower(trim(col("category"))))
+        .fillna({"category": "unknown"})
+    )
+
+    logger.info(f"Products count: {products.count()}")
+
+    products.write.mode("overwrite") \
+        .parquet(f"{SILVER_PATH}/dim_products")
+
+    logger.info("dim_products created")
+
+    # ---------------------------------------------
+    # Transactions
+    # ---------------------------------------------
+    logger.info("Processing Transactions")
+
+    transactions = transactions.dropDuplicates(["transaction_id"])
+
+    transactions = (
+        transactions
+        .withColumn("transaction_date", to_date(col("transaction_date")))
+        .fillna({"status": "unknown", "channel": "unknown"})
+    )
+
+    logger.info(f"Transactions before validation: {transactions.count()}")
+
+    # ---------------------------------------------
+    # Referential Integrity Enforcement
+    # ---------------------------------------------
+    transactions = transactions.join(
+        broadcast(customers.filter(col("is_current") == True)
+                  .select("customer_id")),
+        "customer_id",
+        "inner"
+    )
+
+    transactions = transactions.join(
+        broadcast(products.select("product_id")),
+        "product_id",
+        "inner"
+    )
+
+    logger.info(f"Transactions after validation: {transactions.count()}")
+
+    # ---------------------------------------------
+    # Partition for performance
+    # ---------------------------------------------
+    transactions.write.mode("overwrite") \
+        .partitionBy("transaction_date") \
+        .parquet(f"{SILVER_PATH}/fact_transactions")
+
+    logger.info("fact_transactions created")
+    logger.info("Silver Layer Completed Successfully")
+    logger.info("--------------------------------------------------")
+
+if __name__ == "__main__":
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.appName("SilverLayer").getOrCreate()
+
+    run_silver(spark)
+
+    spark.stop()

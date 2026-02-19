@@ -1,23 +1,45 @@
-from pyspark.sql import SparkSession
+import os
 from pyspark.sql.functions import when, col
 
-spark = SparkSession.builder.appName("FraudDetection").getOrCreate()
+# -------------------------------------------------
+# Paths
+# -------------------------------------------------
+SILVER_PATH = "data/silver/fact_transactions"
+GOLD_PATH = "data/gold/fraud_analysis"
 
-# Read from Silver
-df = spark.read.csv("data/silver/fact_transactions", header=True)
+os.makedirs(GOLD_PATH, exist_ok=True)
 
-# Convert amount to double first
-df = df.withColumn("amount", col("amount").cast("double"))
+# -------------------------------------------------
+# Fraud Detection Function
+# -------------------------------------------------
+def run_fraud(spark):
 
-# Add fraud flag column
-fraud_df = df.withColumn(
-    "fraud_flag",
-    when(col("amount") > 10000, "YES").otherwise("NO")
-)
+    spark.sparkContext.setLogLevel("ERROR")
 
-# Write to Gold
-fraud_df.write.mode("overwrite").option("header", True).csv("data/gold/fraud_analysis")
+    # Read from Silver (parquet)
+    df = spark.read.parquet(SILVER_PATH)
 
-print("Fraud detection completed successfully.")
+    # Ensure amount is double
+    df = df.withColumn("amount", col("amount").cast("double"))
 
-spark.stop()
+    # Simple fraud rule (amount > 5000)
+    fraud_df = df.withColumn(
+        "fraud_flag",
+        when(col("amount") > 5000, True).otherwise(False)
+    )
+
+    # Write to Gold
+    fraud_df.write.mode("overwrite") \
+        .parquet(GOLD_PATH)
+
+    print("Fraud detection completed successfully.")
+
+
+if __name__ == "__main__":
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.builder.appName("FraudDetection").getOrCreate()
+
+    run_fraud(spark)
+
+    spark.stop()

@@ -1,60 +1,88 @@
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
 import os
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
 
-spark = SparkSession.builder.appName("StreamingPipeline").getOrCreate()
-spark.sparkContext.setLogLevel("ERROR")
+# -------------------------------------------------
+# Paths
+# -------------------------------------------------
+STREAM_PATH = "data/streaming_input"
+GOLD_PATH = "data/gold/streaming_kpi"
+CHECKPOINT_PATH = "data/checkpoint"
 
-stream_path = "data/streaming_input"
-gold_path = "data/gold/streaming_kpi"
-checkpoint_path = "data/checkpoint"
+os.makedirs(GOLD_PATH, exist_ok=True)
+os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
-os.makedirs(gold_path, exist_ok=True)
-os.makedirs(checkpoint_path, exist_ok=True)
+# -------------------------------------------------
+# Streaming Function
+# -------------------------------------------------
+def run_streaming(spark):
 
-schema = """
-transaction_id INT,
-customer_id INT,
-product_id INT,
-amount DOUBLE,
-transaction_timestamp TIMESTAMP,
-status STRING,
-channel STRING
-"""
+    spark.sparkContext.setLogLevel("ERROR")
 
-# Read Streaming Files
-stream_df = spark.readStream.schema(schema).option("header", True).csv(stream_path)
+    schema = StructType([
+        StructField("transaction_id", IntegerType(), True),
+        StructField("customer_id", IntegerType(), True),
+        StructField("product_id", IntegerType(), True),
+        StructField("amount", DoubleType(), True),
+        StructField("transaction_timestamp", TimestampType(), True),
+        StructField("status", StringType(), True),
+        StructField("channel", StringType(), True),
+    ])
+
+    # Read Streaming Files
+    stream_df = (
+        spark.readStream
+        .schema(schema)
+        .option("header", True)
+        .csv(STREAM_PATH)
+    )
+
+    # Watermark for Late Data Handling
+    stream_df = stream_df.withWatermark(
+        "transaction_timestamp",
+        "10 minutes"
+    )
+
+    # Window Aggregation
+    windowed_df = stream_df.groupBy(
+        window(col("transaction_timestamp"), "5 minutes")
+    ).agg(
+        sum("amount").alias("total_revenue"),
+        count("transaction_id").alias("total_transactions")
+    )
+
+    final_df = windowed_df.select(
+        col("window.start").alias("window_start"),
+        col("window.end").alias("window_end"),
+        col("total_revenue"),
+        col("total_transactions")
+    )
+
+    # Write Streaming Output
+    query = (
+        final_df.writeStream
+        .outputMode("append")
+        .format("csv")
+        .option("path", GOLD_PATH)
+        .option("checkpointLocation", CHECKPOINT_PATH)
+        .option("header", True)
+        .start()
+    )
+
+    print("Streaming Job Started...")
+    print("Drop batch files into data/streaming_input to simulate streaming.")
+
+    return query
 
 
-# Handle Late Data Using Watermark
-stream_df = stream_df.withWatermark(
-    "transaction_timestamp",
-    "10 minutes"
-)
+# -------------------------------------------------
+# Optional Standalone Run
+# -------------------------------------------------
+if __name__ == "__main__":
+    from pyspark.sql import SparkSession
 
-# Window Aggregation
-# Window Aggregation
-windowed_df = stream_df.groupBy(
-    window(col("transaction_timestamp"), "5 minutes")
-).agg(
-    sum("amount").alias("total_revenue"),
-    count("transaction_id").alias("total_transactions")
-)
+    spark = SparkSession.builder.appName("StreamingPipeline").getOrCreate()
 
-final_df = windowed_df.select(
-    col("window.start").alias("window_start"),
-    col("window.end").alias("window_end"),
-    col("total_revenue"),
-    col("total_transactions")
-)
+    query = run_streaming(spark)
 
-# Write Streaming Output
-query = final_df.writeStream.outputMode("append").format("csv") \
-    .option("path", gold_path) \
-    .option("checkpointLocation", checkpoint_path) \
-    .option("header", True).start()
-
-print("Streaming Job Started...")
-print("Add batch files to data/streaming_input folder...")
-
-query.awaitTermination()
+    query.awaitTermination()

@@ -1,7 +1,10 @@
 import pandas as pd
 import random
+import os
 
-N = 5000
+random.seed(42)
+
+N = 1000
 categories = ["Electronics","Clothing","Home","Sports","Books"]
 
 data = []
@@ -17,5 +20,7 @@ df = pd.DataFrame(data, columns=[
     "product_id","product_name","category","price"
 ])
 
+os.makedirs("../data/raw", exist_ok=True)
 df.to_csv("../data/raw/products.csv", index=False)
-print("Generated 5000 products.")
+
+print(f"Generated {len(df)} products.")
